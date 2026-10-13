@@ -1,1 +1,299 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Yoshi - Feliz cumpleaños</title>
+<style>
+  body{
+    margin:0;background:#111;display:flex;flex-direction:column;
+    align-items:center;justify-content:center;min-height:100vh;
+    font-family:'Trebuchet MS',sans-serif;color:#fff;
+  }
+  canvas{
+    width:min(96vw,800px);height:auto;border:4px solid #fff;
+    border-radius:8px;background:#5c94fc;image-rendering:pixelated;
+  }
+  button{
+    margin-top:14px;padding:10px 26px;font-size:18px;font-weight:bold;
+    border:none;border-radius:30px;background:#ffcc00;color:#222;
+    cursor:pointer;box-shadow:0 4px 0 #b38f00;
+  }
+  button:active{transform:translateY(3px);box-shadow:0 1px 0 #b38f00}
+</style>
+</head>
+<body>
+<canvas id="game" width="800" height="400"></canvas>
+<button id="replay">▶ Repetir</button>
 
+<script>
+const c = document.getElementById('game');
+const ctx = c.getContext('2d');
+const W = 800, H = 400, G = 330;          // G = altura del suelo
+const SPEED = 3, FLAG = 3700, CASTLE = 4000, END = 4300;
+
+let y, obs, coins, cam, state, flagY, score, tick, confetti, alpha, msgT;
+
+function reset(){
+  y = {x:60, b:G, vy:0, ground:true};
+  obs = []; coins = [];
+  // Obstáculos: tuberías y goombas
+  [650,1250,2050,2950].forEach(x => obs.push({t:'pipe', x, w:50, h:50}));
+  [950,1650,2450,3300].forEach(x => obs.push({t:'goomba', x, w:34, h:32}));
+  // Monedas en arco sobre cada obstáculo
+  obs.forEach(o => {
+    const cx = o.x + o.w/2;
+    coins.push({x:cx-40, y:G-100, got:false});
+    coins.push({x:cx,    y:G-125, got:false});
+    coins.push({x:cx+40, y:G-100, got:false});
+  });
+  // Monedas en el suelo
+  for(let i=0;i<30;i++){
+    const x = 300 + i*110;
+    if(!obs.some(o => Math.abs(o.x - x) < 130)) coins.push({x, y:G-30, got:false});
+  }
+  cam = 0; state = 'run'; flagY = 0; score = 0; tick = 0;
+  confetti = []; alpha = 1; msgT = 0;
+}
+
+/* ---------- DIBUJO ---------- */
+function ell(x,yy,rx,ry,col){
+  ctx.fillStyle = col; ctx.beginPath();
+  ctx.ellipse(x,yy,rx,ry,0,0,Math.PI*2); ctx.fill();
+}
+
+function drawYoshi(){
+  const sx = y.x - cam, top = y.b - 50;
+  const moving = (state==='run' || state==='walk') && y.ground;
+  const leg = moving ? Math.sin(tick*0.4)*6 : 0;
+  ctx.save();
+  ctx.globalAlpha = Math.max(alpha,0);
+  ctx.translate(sx, top);
+  // cola
+  ell(4,38,9,6,'#2fb52f');
+  // cuerpo
+  ell(18,32,15,16,'#3ecf3e');
+  ell(25,37,8,10,'#fff');
+  // silla roja
+  ell(10,26,9,5,'#e8321e');
+  // piernas / zapatos
+  const air = !y.ground ? 4 : 0;
+  ell(13+leg,47-air,9,5,'#ff8c1a');
+  ell(28-leg,47-air,9,5,'#ff8c1a');
+  // cabeza
+  ell(28,14,12,11,'#3ecf3e');
+  // nariz grande
+  ell(37,18,10,8,'#5ee05e');
+  ell(42,15,1.8,1.8,'#145214');
+  // ojo
+  ell(30,6,5,7,'#fff');
+  ell(32,7,2.2,3.2,'#000');
+  // cresta
+  ell(20,6,4,3,'#2fb52f');
+  ctx.restore();
+}
+
+function drawPipe(o){
+  const x = o.x - cam;
+  ctx.fillStyle = '#1fa21f'; ctx.fillRect(x+4, G-o.h+12, o.w-8, o.h-12);
+  ctx.fillStyle = '#2fd12f'; ctx.fillRect(x, G-o.h, o.w, 14);
+  ctx.fillStyle = '#0f6b0f'; ctx.fillRect(x+o.w-10, G-o.h+14, 6, o.h-14);
+  ctx.strokeStyle = '#0a4a0a'; ctx.lineWidth = 2;
+  ctx.strokeRect(x, G-o.h, o.w, 14);
+}
+
+function drawGoomba(o){
+  const x = o.x - cam, f = Math.sin(tick*0.2)*3;
+  ell(x+17, G-18, 17, 15, '#a0522d');
+  ell(x+8+f,  G-3, 8, 4, '#3b1f0b');
+  ell(x+26-f, G-3, 8, 4, '#3b1f0b');
+  ell(x+11, G-22, 4, 5, '#fff'); ell(x+23, G-22, 4, 5, '#fff');
+  ell(x+12, G-21, 2, 3, '#000'); ell(x+22, G-21, 2, 3, '#000');
+  ctx.strokeStyle='#000'; ctx.lineWidth=2;
+  ctx.beginPath(); ctx.moveTo(x+6,G-30); ctx.lineTo(x+14,G-26);
+  ctx.moveTo(x+28,G-30); ctx.lineTo(x+20,G-26); ctx.stroke();
+}
+
+function drawCoin(co){
+  const w = Math.abs(Math.cos(tick*0.08 + co.x)) * 8 + 2;
+  ell(co.x-cam, co.y, w, 10, '#ffd400');
+  ell(co.x-cam, co.y, Math.max(w-3,1), 7, '#ffef7a');
+}
+
+function drawBackground(){
+  const g = ctx.createLinearGradient(0,0,0,G);
+  g.addColorStop(0,'#4a86f0'); g.addColorStop(1,'#a8d4ff');
+  ctx.fillStyle = g; ctx.fillRect(0,0,W,H);
+  // nubes
+  for(let i=-1;i<4;i++){
+    const x = i*300 - (cam*0.3 % 300) + 60, yy = 60 + (i%2)*35;
+    ell(x,yy,32,16,'#fff'); ell(x+25,yy+4,26,13,'#fff'); ell(x-25,yy+4,24,12,'#fff');
+  }
+  // colinas
+  for(let i=-1;i<4;i++){
+    const x = i*350 - (cam*0.5 % 350) + 150;
+    ctx.fillStyle = '#3aa63a';
+    ctx.beginPath(); ctx.ellipse(x,G,110,80,0,Math.PI,0); ctx.fill();
+    ell(x-25,G-45,5,7,'#1d6e1d'); ell(x+25,G-45,5,7,'#1d6e1d');
+  }
+}
+
+function drawGround(){
+  ctx.fillStyle = '#c84c0c'; ctx.fillRect(0,G,W,H-G);
+  ctx.fillStyle = '#3ecf3e'; ctx.fillRect(0,G,W,8);
+  ctx.strokeStyle = '#7a2e05'; ctx.lineWidth = 2;
+  const off = -(cam % 40);
+  for(let x=off;x<W;x+=40){
+    ctx.beginPath(); ctx.moveTo(x,G+8); ctx.lineTo(x,H); ctx.stroke();
+  }
+  for(let yy=G+30;yy<H;yy+=22){
+    ctx.beginPath(); ctx.moveTo(0,yy); ctx.lineTo(W,yy); ctx.stroke();
+  }
+}
+
+function drawFlag(){
+  const x = FLAG - cam;
+  ctx.fillStyle = '#ddd'; ctx.fillRect(x-3, G-220, 6, 220);
+  ell(x, G-224, 8, 8, '#ffd400');
+  const fy = G-212 + flagY;
+  // bandera más grande para que quepa el 24
+  ctx.fillStyle = '#e8321e';
+  ctx.beginPath(); ctx.moveTo(x-3,fy); ctx.lineTo(x-75,fy+24); ctx.lineTo(x-3,fy+48); ctx.fill();
+  // número 24
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 22px "Trebuchet MS", sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('24', x-33, fy+25);
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'alphabetic';
+}
+
+function drawCastle(){
+  const x = CASTLE - cam;
+  ctx.fillStyle = '#b9b9b9'; ctx.fillRect(x, G-130, 140, 130);
+  ctx.fillStyle = '#a0a0a0';
+  for(let i=0;i<5;i++) ctx.fillRect(x+i*30, G-150, 20, 22);
+  ctx.fillStyle = '#7a7a7a';
+  for(let r=0;r<6;r++) ctx.fillRect(x, G-120+r*20, 140, 2);
+  ctx.fillStyle = '#222';
+  ctx.beginPath(); ctx.moveTo(x+50,G); ctx.lineTo(x+50,G-45);
+  ctx.arc(x+70,G-45,20,Math.PI,0); ctx.lineTo(x+90,G); ctx.fill();
+}
+
+function drawHUD(){
+  ctx.fillStyle = '#fff'; ctx.font = 'bold 18px "Courier New", monospace';
+  ctx.textAlign = 'left';
+  ctx.fillText('YOSHI', 20, 28);
+  ctx.fillText('🪙 x ' + String(score).padStart(2,'0'), 20, 50);
+  ctx.textAlign = 'right';
+  ctx.fillText('MUNDO 1-1', W-20, 28);
+  ctx.textAlign = 'left';
+}
+
+function drawMessage(){
+  const pop = Math.min(msgT/30, 1);
+  const bounce = 1 + Math.sin(msgT*0.1)*0.03;
+  ctx.save();
+  ctx.translate(W/2, 170);
+  ctx.scale(pop*bounce, pop*bounce);
+  ctx.fillStyle = 'rgba(0,0,0,0.55)';
+  ctx.beginPath(); ctx.roundRect(-370,-70,740,150,24); ctx.fill();
+  ctx.textAlign = 'center';
+  ctx.font = 'bold 50px "Trebuchet MS", sans-serif';
+  ctx.lineWidth = 8; ctx.strokeStyle = '#a3170a';
+  ctx.strokeText('¡Feliz cumpleaños primooo!', 0, 10);
+  ctx.fillStyle = '#ffd400';
+  ctx.fillText('¡Feliz cumpleaños primooo!', 0, 10);
+  ctx.font = '44px sans-serif';
+  ctx.fillText('🎂 🎉 🎁 🎈', 0, 66);
+  ctx.restore();
+  ctx.textAlign = 'left';
+}
+
+function drawConfetti(){
+  confetti.forEach(p => {
+    ctx.save(); ctx.translate(p.x,p.y); ctx.rotate(p.r);
+    ctx.fillStyle = p.c; ctx.fillRect(-4,-2,8,4); ctx.restore();
+  });
+}
+
+/* ---------- LÓGICA ---------- */
+function update(){
+  tick++;
+  if(state==='run'){
+    y.x += SPEED;
+    // salto automático
+    for(const o of obs){
+      const d = o.x - (y.x + 40);
+      if(y.ground && d <= 25 && d > -10){ y.vy = -14; y.ground = false; }
+    }
+    if(y.x + 40 >= FLAG){ y.x = FLAG - 40; state = 'flag'; }
+  }
+  else if(state==='flag'){
+    flagY += 2;
+    if(flagY >= 170) state = 'walk';
+  }
+  else if(state==='walk'){
+    y.x += SPEED;
+    if(y.x >= CASTLE + 50) state = 'enter';
+  }
+  else if(state==='enter'){
+    alpha -= 0.02;
+    if(alpha <= 0) state = 'end';
+  }
+  else if(state==='end'){
+    msgT++;
+    if(tick % 2 === 0){
+      for(let i=0;i<4;i++) confetti.push({
+        x:Math.random()*W, y:-10, vx:(Math.random()-0.5)*2,
+        vy:1+Math.random()*3, r:Math.random()*6, vr:(Math.random()-0.5)*0.3,
+        c:['#ff4d4d','#ffd400','#4dff6a','#4da6ff','#ff4dd2'][Math.floor(Math.random()*5)]
+      });
+    }
+  }
+
+  // física
+  y.vy += 0.55; y.b += y.vy;
+  if(y.b >= G){ y.b = G; y.vy = 0; y.ground = true; }
+
+  // monedas
+  coins.forEach(co => {
+    if(!co.got && Math.hypot(co.x-(y.x+20), co.y-(y.b-25)) < 32){
+      co.got = true; score++;
+    }
+  });
+
+  confetti.forEach(p => { p.x+=p.vx; p.y+=p.vy; p.r+=p.vr; });
+  confetti = confetti.filter(p => p.y < H+20);
+
+  cam = Math.min(Math.max(y.x - 200, 0), END - W);
+}
+
+function draw(){
+  drawBackground();
+  drawGround();
+  drawFlag();
+  drawCastle();
+  obs.forEach(o => o.t==='pipe' ? drawPipe(o) : drawGoomba(o));
+  coins.forEach(co => { if(!co.got) drawCoin(co); });
+  drawYoshi();
+  drawHUD();
+  drawConfetti();
+  if(state==='end') drawMessage();
+}
+
+let last = 0, acc = 0;
+function loop(ts){
+  acc += Math.min(ts - last, 100); last = ts;
+  while(acc >= 1000/60){ update(); acc -= 1000/60; }
+  draw();
+  requestAnimationFrame(loop);
+}
+
+document.getElementById('replay').onclick = reset;
+reset();
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
